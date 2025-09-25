@@ -66,6 +66,43 @@
             align-items: center;
         }
 
+        /* Search Bar */
+        .search-container {
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 1rem 1rem 1rem 3rem;
+            font-size: 1.1rem;
+            border: 2px solid var(--border-color);
+            border-radius: var(--border-radius);
+            background: var(--surface-color);
+            transition: var(--transition);
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 1.2rem;
+        }
+
+        .search-results-info {
+            margin-bottom: 1rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
         /* AI Toggle */
         .ai-toggle {
             display: flex;
@@ -302,21 +339,6 @@
             gap: 0.5rem;
             justify-content: flex-end;
             flex-wrap: wrap;
-        }
-
-        .recipe-source {
-            margin-bottom: 1rem;
-        }
-
-        .source-link {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            text-decoration: none;
-            word-break: break-all;
-        }
-
-        .source-link:hover {
-            color: var(--primary-color);
         }
 
         .delete-btn, .edit-btn, .view-btn {
@@ -657,6 +679,18 @@
             margin-bottom: 1rem;
         }
 
+        /* No Results State */
+        .no-results {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+        }
+
+        .no-results h3 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .header {
@@ -728,6 +762,22 @@
                 </button>
             </div>
         </header>
+
+        <!-- Search Bar -->
+        <div class="search-container">
+            <div class="search-icon">🔍</div>
+            <input 
+                type="text" 
+                id="searchInput" 
+                class="search-input" 
+                placeholder="Szukaj przepisów po nazwie lub składnikach..."
+            >
+        </div>
+
+        <!-- Search Results Info -->
+        <div class="search-results-info hidden" id="searchResultsInfo">
+            Znaleziono <span id="resultsCount">0</span> przepisów
+        </div>
 
         <!-- Recipes Grid -->
         <main class="main">
@@ -853,21 +903,34 @@
                 console.log('🔍 Analizuję:', url, useAI ? 'z Claude AI' : 'bez AI');
                 
                 try {
-                    // Sprawdź czy to znana strona polska
+                    // Spróbuj najpierw ScrapingBee (bez kluczy API)
+                    const scrapingBeeRecipe = await this.tryScrapingBee(url);
+                    if (scrapingBeeRecipe) {
+                        console.log('✅ Sukces ze ScrapingBee');
+                        scrapingBeeRecipe.source = url;
+                        return scrapingBeeRecipe;
+                    }
+
+                    // Spróbuj Browserless (bez kluczy API)
+                    const browserlessRecipe = await this.tryBrowserless(url);
+                    if (browserlessRecipe) {
+                        console.log('✅ Sukces z Browserless');
+                        browserlessRecipe.source = url;
+                        return browserlessRecipe;
+                    }
+
+                    // Dedykowane parsery dla polskich stron
                     const specialRecipe = await this.trySpecialParser(url);
                     if (specialRecipe) {
                         console.log('✅ Użyto dedykowanego parsera');
                         specialRecipe.source = url;
-                        // Spróbuj pobrać zdjęcie
-                        specialRecipe.image = await this.tryExtractImage(url);
                         return specialRecipe;
                     }
                     
-                    // Próbuj pobrać stronę standardowo
+                    // Standardowe proxy
                     const html = await this.fetchPageContent(url);
                     console.log('✅ Pobrano zawartość strony');
                     
-                    // Wyodrębnij zdjęcie
                     const imageUrl = this.extractImageFromHtml(html, url);
                     
                     // JSON-LD parser
@@ -900,31 +963,306 @@
                 }
             }
 
-            // Próbuje wyodrębnić zdjęcie z URL
-            async tryExtractImage(url) {
+            // ScrapingBee - darmowa wersja
+            async tryScrapingBee(url) {
                 try {
-                    const html = await this.fetchPageContent(url);
-                    return this.extractImageFromHtml(html, url);
+                    // ScrapingBee ma darmową wersję bez kluczy API
+                    const proxyUrl = `https://scrapingbee.com/api/v1/?api_key=demo&url=${encodeURIComponent(url)}&render_js=false`;
+                    
+                    console.log('🐝 Próbuję ScrapingBee...');
+                    const response = await fetch(proxyUrl);
+                    
+                    if (response.ok) {
+                        const html = await response.text();
+                        return this.parseHtmlToRecipe(html, url);
+                    }
                 } catch (e) {
-                    return null;
+                    console.log('⚠️ ScrapingBee nie działa');
                 }
+                return null;
             }
 
-            // Wyodrębnia URL zdjęcia z HTML
+            // Browserless.io - darmowa wersja
+            async tryBrowserless(url) {
+                try {
+                    console.log('🌐 Próbuję Browserless...');
+                    
+                    // Endpoint publiczny Browserless
+                    const response = await fetch('https://chrome.browserless.io/content', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            url: url,
+                            waitFor: 2000
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const html = await response.text();
+                        return this.parseHtmlToRecipe(html, url);
+                    }
+                } catch (e) {
+                    console.log('⚠️ Browserless nie działa');
+                }
+                return null;
+            }
+
+            // Uniwersalny parser HTML -> przepis
+            parseHtmlToRecipe(html, url) {
+                // JSON-LD jest najlepszy
+                const jsonRecipe = this.parseJsonLD(html);
+                if (jsonRecipe && jsonRecipe.ingredients.length > 2 && jsonRecipe.instructions.length > 2) {
+                    jsonRecipe.image = this.extractImageFromHtml(html, url);
+                    return jsonRecipe;
+                }
+
+                // Mikrodata
+                const microdataRecipe = this.parseMicrodata(html);
+                if (microdataRecipe && microdataRecipe.ingredients.length > 2) {
+                    microdataRecipe.image = this.extractImageFromHtml(html, url);
+                    return microdataRecipe;
+                }
+
+                // Inteligentny HTML parser
+                const htmlRecipe = this.parseIntelligentHTML(html, url);
+                if (htmlRecipe && htmlRecipe.ingredients.length > 2) {
+                    return htmlRecipe;
+                }
+
+                return null;
+            }
+
+            // Parser Microdata (schema.org)
+            parseMicrodata(html) {
+                try {
+                    // Szukaj itemtype="https://schema.org/Recipe"
+                    const recipeMatch = html.match(/<[^>]+itemtype="[^"]*schema\.org\/Recipe"[^>]*>(.*?)<\/[^>]+>/s);
+                    if (!recipeMatch) return null;
+
+                    const recipeHtml = recipeMatch[0];
+                    
+                    // Nazwa
+                    const nameMatch = recipeHtml.match(/itemprop="name"[^>]*>([^<]+)</);
+                    const name = nameMatch ? this.cleanText(nameMatch[1]) : 'Przepis';
+
+                    // Składniki
+                    const ingredients = [];
+                    const ingredientMatches = recipeHtml.match(/itemprop="recipeIngredient"[^>]*>([^<]+)</g) || [];
+                    ingredientMatches.forEach(match => {
+                        const ingredient = this.cleanText(match.replace(/itemprop="recipeIngredient"[^>]*>/, ''));
+                        if (ingredient.length > 2) ingredients.push(ingredient);
+                    });
+
+                    // Instrukcje
+                    const instructions = [];
+                    const instructionMatches = recipeHtml.match(/itemprop="recipeInstructions"[^>]*>(.*?)<\//gs) || [];
+                    instructionMatches.forEach(match => {
+                        const instruction = this.cleanText(match.replace(/itemprop="recipeInstructions"[^>]*>/, ''));
+                        if (instruction.length > 10) instructions.push(instruction);
+                    });
+
+                    if (ingredients.length > 0 || instructions.length > 0) {
+                        return {
+                            name,
+                            prepTime: 'Sprawdź na stronie',
+                            ingredients: ingredients.length > 0 ? ingredients : ['Sprawdź składniki na oryginalnej stronie'],
+                            instructions: instructions.length > 0 ? instructions : ['Zobacz instrukcje na oryginalnej stronie']
+                        };
+                    }
+                } catch (e) {
+                    console.warn('Błąd parsowania Microdata:', e);
+                }
+                return null;
+            }
+
+            // Inteligentny HTML parser
+            parseIntelligentHTML(html, url) {
+                const domain = new URL(url).hostname.toLowerCase();
+                
+                // Nazwa przepisu
+                const titlePatterns = [
+                    /<h1[^>]*class="[^"]*recipe[^"]*"[^>]*>(.*?)<\/h1>/i,
+                    /<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h1>/i,
+                    /<h1[^>]*>(.*?)<\/h1>/i,
+                    /<title[^>]*>(.*?)<\/title>/i
+                ];
+
+                let name = 'Przepis';
+                for (const pattern of titlePatterns) {
+                    const match = html.match(pattern);
+                    if (match) {
+                        name = this.cleanText(match[1]);
+                        // Usuń typowe suffiksy
+                        name = name.replace(/\s*[-|]\s*(Recipe|Przepis|Allrecipes).*$/i, '');
+                        if (name.length > 5) break;
+                    }
+                }
+
+                // Składniki - zaawansowane wzorce
+                const ingredients = this.extractAdvancedIngredients(html);
+                
+                // Instrukcje - zaawansowane wzorce  
+                const instructions = this.extractAdvancedInstructions(html);
+
+                // Czas przygotowania
+                const timePatterns = [
+                    /prep[^>]*time[^>]*:?\s*(\d+\s*(?:min|hour|godz|h))/i,
+                    /cooking[^>]*time[^>]*:?\s*(\d+\s*(?:min|hour|godz|h))/i,
+                    /czas[^>]*:?\s*(\d+\s*(?:min|godz|h))/i
+                ];
+
+                let prepTime = 'Sprawdź na stronie';
+                for (const pattern of timePatterns) {
+                    const match = html.match(pattern);
+                    if (match) {
+                        prepTime = match[1];
+                        break;
+                    }
+                }
+
+                return {
+                    name: this.normalizePolishText(name),
+                    prepTime,
+                    ingredients: ingredients.length > 0 ? ingredients : [`Nie udało się automatycznie wyodrębnić składników ze strony ${domain}`, 'Kliknij tytuł aby przejść na stronę źródłową'],
+                    instructions: instructions.length > 0 ? instructions : [`Instrukcje dostępne na oryginalnej stronie ${domain}`, 'Kliknij tytuł aby przejść na stronę źródłową'],
+                    image: this.extractImageFromHtml(html, url)
+                };
+            }
+
+            // Zaawansowane wyodrębnianie składników
+            extractAdvancedIngredients(html) {
+                const patterns = [
+                    // Klasy CSS
+                    /<[^>]*class="[^"]*ingredient[^"]*"[^>]*>(.*?)<\/[^>]+>/gi,
+                    /<[^>]*class="[^"]*recipe-ingredient[^"]*"[^>]*>(.*?)<\/[^>]+>/gi,
+                    // Listy ze wskazówkami
+                    /<ul[^>]*>[^<]*(?:<li[^>]*>[^<]*(?:cup|tbsp|tsp|gram|kg|ml|litr|łyżk|szklank)[^<]*<\/li>[^<]*){3,}[^<]*<\/ul>/gi,
+                    // ID-based
+                    /<[^>]*id="[^"]*ingredient[^"]*"[^>]*>(.*?)<\/[^>]+>/gi
+                ];
+
+                const ingredients = new Set();
+
+                for (const pattern of patterns) {
+                    const matches = html.match(pattern) || [];
+                    for (const match of matches) {
+                        // Wyodrębnij elementy listy
+                        const listItems = match.match(/<li[^>]*>(.*?)<\/li>/gi) || [match];
+                        
+                        for (const item of listItems) {
+                            const text = this.cleanText(item.replace(/<[^>]*>/g, ''));
+                            if (this.looksLikeIngredient(text)) {
+                                ingredients.add(text);
+                            }
+                        }
+                    }
+                }
+
+                return Array.from(ingredients).slice(0, 20); // Max 20 składników
+            }
+
+            // Sprawdza czy tekst wygląda na składnik
+            looksLikeIngredient(text) {
+                if (text.length < 3 || text.length > 150) return false;
+                
+                // Słowa kluczowe składników
+                const ingredientKeywords = [
+                    'cup', 'tbsp', 'tsp', 'oz', 'lb', 'gram', 'kg', 'ml', 'litr', 'liter',
+                    'łyżka', 'łyżeczka', 'szklanka', 'dag', 'dkg', 'garść', 'szczyptę',
+                    'mąka', 'cukier', 'sól', 'pieprz', 'olej', 'masło', 'jajko', 'mleko',
+                    'flour', 'sugar', 'salt', 'pepper', 'oil', 'butter', 'egg', 'milk'
+                ];
+
+                const lowerText = text.toLowerCase();
+                return ingredientKeywords.some(keyword => lowerText.includes(keyword)) ||
+                       /^\d+/.test(text) || // Zaczyna się od liczby
+                       /\d+\s*(g|kg|ml|l|cup|tbsp|tsp|oz|lb)/.test(lowerText); // Zawiera jednostki
+            }
+
+            // Zaawansowane wyodrębnianie instrukcji
+            extractAdvancedInstructions(html) {
+                const patterns = [
+                    /<[^>]*class="[^"]*instruction[^"]*"[^>]*>(.*?)<\/[^>]+>/gi,
+                    /<[^>]*class="[^"]*recipe-instruction[^"]*"[^>]*>(.*?)<\/[^>]+>/gi,
+                    /<[^>]*class="[^"]*method[^"]*"[^>]*>(.*?)<\/[^>]+>/gi,
+                    /<ol[^>]*>[^<]*(?:<li[^>]*>[^<]{20,}[^<]*<\/li>[^<]*){2,}[^<]*<\/ol>/gi
+                ];
+
+                const instructions = new Set();
+
+                for (const pattern of patterns) {
+                    const matches = html.match(pattern) || [];
+                    for (const match of matches) {
+                        const listItems = match.match(/<li[^>]*>(.*?)<\/li>/gi) || [match];
+                        
+                        for (const item of listItems) {
+                            const text = this.cleanText(item.replace(/<[^>]*>/g, ''));
+                            if (this.looksLikeInstruction(text)) {
+                                instructions.add(text);
+                            }
+                        }
+                    }
+                }
+
+                return Array.from(instructions).slice(0, 15); // Max 15 kroków
+            }
+
+            // Sprawdza czy tekst wygląda na instrukcję
+            looksLikeInstruction(text) {
+                if (text.length < 10 || text.length > 500) return false;
+                
+                const instructionKeywords = [
+                    'mix', 'stir', 'add', 'pour', 'cook', 'bake', 'heat', 'cool',
+                    'wymieszaj', 'dodaj', 'podgrzej', 'piecz', 'gotuj', 'studzić', 'zalej'
+                ];
+
+                const lowerText = text.toLowerCase();
+                return instructionKeywords.some(keyword => lowerText.includes(keyword)) ||
+                       /^(krok\s*\d+|step\s*\d+|\d+\.)/i.test(text); // Zaczyna się od "Krok" lub numeru
+            }
+
+            // Normalizuj polski tekst (usuń HTML entities)
+            normalizePolishText(text) {
+                const entities = {
+                    '&oacute;': 'ó', '&Oacute;': 'Ó',
+                    '&aacute;': 'ą', '&Aacute;': 'Ą', 
+                    '&eacute;': 'ę', '&Eacute;': 'Ę',
+                    '&sacute;': 'ś', '&Sacute;': 'Ś',
+                    '&nacute;': 'ń', '&Nacute;': 'Ń',
+                    '&cacute;': 'ć', '&Cacute;': 'Ć',
+                    '&zacute;': 'ź', '&Zacute;': 'Ź',
+                    '&#322;': 'ł', '&#321;': 'Ł',
+                    '&#380;': 'ż', '&#379;': 'Ż'
+                };
+
+                let normalized = text;
+                for (const [entity, char] of Object.entries(entities)) {
+                    normalized = normalized.replace(new RegExp(entity, 'g'), char);
+                }
+
+                // Ogólne HTML entities
+                normalized = normalized
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'")
+                    .replace(/&nbsp;/g, ' ');
+
+                return normalized;
+            }
+
+            // Wyodrębnij zdjęcie z HTML
             extractImageFromHtml(html, baseUrl) {
-                // Spróbuj znaleźć główne zdjęcie przepisu
                 const imagePatterns = [
-                    // JSON-LD image
                     /"image":\s*"([^"]+)"/,
                     /"image":\s*\[\s*"([^"]+)"/,
-                    // OpenGraph image
                     /<meta[^>]*property="og:image"[^>]*content="([^"]+)"/,
-                    // Recipe image classes
                     /<img[^>]*class="[^"]*recipe[^"]*"[^>]*src="([^"]+)"/i,
                     /<img[^>]*class="[^"]*featured[^"]*"[^>]*src="([^"]+)"/i,
-                    // General patterns for food images
-                    /<img[^>]*alt="[^"]*recipe[^"]*"[^>]*src="([^"]+)"/i,
-                    /<img[^>]*alt="[^"]*food[^"]*"[^>]*src="([^"]+)"/i
+                    /<img[^>]*alt="[^"]*recipe[^"]*"[^>]*src="([^"]+)"/i
                 ];
 
                 for (const pattern of imagePatterns) {
@@ -932,7 +1270,7 @@
                     if (match && match[1]) {
                         let imageUrl = match[1];
                         
-                        // Konwertuj relatywny URL na absolutny
+                        // Konwertuj na absolutny URL
                         if (imageUrl.startsWith('//')) {
                             imageUrl = 'https:' + imageUrl;
                         } else if (imageUrl.startsWith('/')) {
@@ -940,9 +1278,10 @@
                             imageUrl = base.protocol + '//' + base.host + imageUrl;
                         }
                         
-                        // Sprawdź czy URL wygląda na zdjęcie
-                        if (imageUrl.match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i)) {
-                            console.log('✅ Znaleziono zdjęcie:', imageUrl);
+                        // Sprawdź czy to prawidłowy obraz
+                        if (imageUrl.match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i) && 
+                            !imageUrl.includes('placeholder') && 
+                            !imageUrl.includes('default')) {
                             return imageUrl;
                         }
                     }
@@ -951,21 +1290,18 @@
                 return null;
             }
 
-            // Dedykowane parsery dla polskich stron
+            // Reszta metod pozostaje bez zmian...
             async trySpecialParser(url) {
                 const domain = new URL(url).hostname.toLowerCase();
                 
-                // KwestiaSmaku.com - ulepszona wersja
                 if (domain.includes('kwestiasmaku.com')) {
                     return await this.parseKwestiaSmakuAdvanced(url);
                 }
                 
-                // Aniagotuje.pl
                 if (domain.includes('aniagotuje.pl')) {
                     return this.parseAniaGotuje(url);
                 }
                 
-                // Przepisy.pl
                 if (domain.includes('przepisy.pl')) {
                     return this.parsePrzepisy(url);
                 }
@@ -973,36 +1309,28 @@
                 return null;
             }
 
-            // Ulepszona wersja parsera KwestiaSmaku
             async parseKwestiaSmakuAdvanced(url) {
-                // Spróbuj najpierw pobrać stronę z lepszymi headerami
                 try {
                     const html = await this.fetchWithUserAgent(url);
                     if (html) {
-                        console.log('✅ Pobrano KwestiaSmaku z User-Agent');
-                        
-                        // Szukaj JSON-LD w pobranym HTML
                         const jsonRecipe = this.parseJsonLD(html);
                         if (jsonRecipe && jsonRecipe.ingredients.length > 2) {
                             jsonRecipe.image = this.extractImageFromHtml(html, url);
                             return jsonRecipe;
                         }
                         
-                        // Parsuj HTML bezpośrednio
-                        const htmlRecipe = this.parseKwestiaSmakuHTML(html, url);
+                        const htmlRecipe = this.parseIntelligentHTML(html, url);
                         if (htmlRecipe && htmlRecipe.ingredients.length > 2) {
                             return htmlRecipe;
                         }
                     }
                 } catch (e) {
-                    console.log('⚠️ Nie udało się pobrać KwestiaSmaku, używam fallback');
+                    console.log('⚠️ Nie udało się pobrać KwestiaSmaku');
                 }
                 
-                // Fallback - rozpoznaj typ przepisu z URL
                 return this.parseKwestiaSmakuFallback(url);
             }
 
-            // Pobieranie z lepszymi headerami
             async fetchWithUserAgent(url) {
                 const proxies = [
                     `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
@@ -1014,13 +1342,7 @@
                         const response = await fetch(proxy, {
                             method: 'GET',
                             headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                                'Accept-Language': 'pl-PL,pl;q=0.9,en;q=0.8',
-                                'Accept-Encoding': 'gzip, deflate',
-                                'DNT': '1',
-                                'Connection': 'keep-alive',
-                                'Upgrade-Insecure-Requests': '1'
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                             }
                         });
                         
@@ -1039,103 +1361,6 @@
                 return null;
             }
 
-            // Parser HTML dla KwestiaSmaku
-            parseKwestiaSmakuHTML(html, url) {
-                try {
-                    // Wyodrębnij nazwę
-                    const titleMatch = html.match(/<h1[^>]*class="entry-title"[^>]*>(.*?)<\/h1>/s) ||
-                                      html.match(/<title[^>]*>(.*?)<\/title>/s);
-                    const name = titleMatch ? this.cleanText(titleMatch[1]) : 'Przepis z KwestiaSmaku';
-                    
-                    // Wyodrębnij składniki
-                    const ingredients = this.extractIngredientsFromKS(html);
-                    
-                    // Wyodrębnij instrukcje
-                    const instructions = this.extractInstructionsFromKS(html);
-                    
-                    // Czas przygotowania
-                    const timeMatch = html.match(/czas[^>]*:?\s*(\d+\s*(?:min|godz|h))/i);
-                    const prepTime = timeMatch ? timeMatch[1] : 'Sprawdź na stronie';
-                    
-                    if (ingredients.length > 0 || instructions.length > 0) {
-                        return {
-                            name: name.replace(' | Kwestia Smaku', '').trim(),
-                            prepTime,
-                            ingredients: ingredients.length > 0 ? ingredients : ['Sprawdź składniki na oryginalnej stronie'],
-                            instructions: instructions.length > 0 ? instructions : ['Zobacz instrukcje na stronie'],
-                            image: this.extractImageFromHtml(html, url)
-                        };
-                    }
-                } catch (e) {
-                    console.warn('Błąd parsowania KwestiaSmaku HTML:', e);
-                }
-                
-                return null;
-            }
-
-            // Wyodrębnij składniki z KwestiaSmaku
-            extractIngredientsFromKS(html) {
-                const patterns = [
-                    /<div[^>]*class="[^"]*ingredients[^"]*"[^>]*>(.*?)<\/div>/gis,
-                    /<ul[^>]*class="[^"]*ingredients[^"]*"[^>]*>(.*?)<\/ul>/gis,
-                    /<div[^>]*id="ingredients"[^>]*>(.*?)<\/div>/gis
-                ];
-                
-                for (const pattern of patterns) {
-                    const matches = html.match(pattern);
-                    if (matches) {
-                        for (const match of matches) {
-                            const items = this.extractListItems(match);
-                            if (items.length > 2) {
-                                return items;
-                            }
-                        }
-                    }
-                }
-                
-                return [];
-            }
-
-            // Wyodrębnij instrukcje z KwestiaSmaku
-            extractInstructionsFromKS(html) {
-                const patterns = [
-                    /<div[^>]*class="[^"]*instructions[^"]*"[^>]*>(.*?)<\/div>/gis,
-                    /<ol[^>]*class="[^"]*instructions[^"]*"[^>]*>(.*?)<\/ol>/gis,
-                    /<div[^>]*id="instructions"[^>]*>(.*?)<\/div>/gis,
-                    /<div[^>]*class="[^"]*recipe-method[^"]*"[^>]*>(.*?)<\/div>/gis
-                ];
-                
-                for (const pattern of patterns) {
-                    const matches = html.match(pattern);
-                    if (matches) {
-                        for (const match of matches) {
-                            const items = this.extractListItems(match);
-                            if (items.length > 1) {
-                                return items;
-                            }
-                        }
-                    }
-                }
-                
-                return [];
-            }
-
-            // Wyodrębnij elementy listy
-            extractListItems(html) {
-                const items = [];
-                const listItems = html.match(/<li[^>]*>(.*?)<\/li>/gis) || [];
-                
-                for (const item of listItems) {
-                    const text = this.cleanText(item.replace(/<[^>]*>/g, ''));
-                    if (text.length > 3 && text.length < 300) {
-                        items.push(text);
-                    }
-                }
-                
-                return items;
-            }
-
-            // Fallback parser dla KwestiaSmaku
             parseKwestiaSmakuFallback(url) {
                 const urlPath = new URL(url).pathname;
                 const pathParts = urlPath.split('/');
@@ -1148,7 +1373,6 @@
                     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
                     .join(' ');
                 
-                // Szablony znanych przepisów
                 if (url.includes('buleczki') || url.includes('cynamonowe') || url.includes('cinnamon')) {
                     return {
                         name: 'Bułeczki Cynamonowe (Cinnamon Rolls)',
@@ -1156,7 +1380,7 @@
                         ingredients: [
                             'Ciasto:',
                             '500g mąki pszennej',
-                            '250ml ciepłego mleka',
+                            '250ml ciepłego mleka', 
                             '80g masła',
                             '1 jajko',
                             '7g suchych drożdży',
@@ -1191,13 +1415,12 @@
                     };
                 }
                 
-                // Ogólny fallback
                 return {
                     name: recipeName || 'Przepis z Kwestia Smaku',
                     prepTime: 'Sprawdź na stronie',
                     ingredients: [
                         'Ten przepis wymaga sprawdzenia na oryginalnej stronie.',
-                        'Kliknij link w tytule aby przejść do pełnego przepisu.'
+                        'Kliknij tytuł przepisu aby przejść do pełnego przepisu.'
                     ],
                     instructions: [
                         'Przejdź do oryginalnej strony aby zobaczyć szczegółowe instrukcje.',
@@ -1214,11 +1437,10 @@
                     prepTime: 'Sprawdź na stronie',
                     ingredients: [
                         'Przepis z AniaGotuje.pl',
-                        'Kliknij link w tytule aby zobaczyć składniki'
+                        'Kliknij tytuł przepisu aby zobaczyć składniki'
                     ],
                     instructions: [
-                        'Zobacz pełne instrukcje na oryginalnej stronie',
-                        'Możesz ręcznie przepisać instrukcje używając "Edytuj"'
+                        'Zobacz pełne instrukcje na oryginalnej stronie'
                     ]
                 };
             }
@@ -1320,7 +1542,7 @@
                         for (const item of items) {
                             if (item['@type'] === 'Recipe' || (Array.isArray(item['@type']) && item['@type'].includes('Recipe'))) {
                                 const recipe = {
-                                    name: item.name || 'Przepis',
+                                    name: this.normalizePolishText(item.name || 'Przepis'),
                                     prepTime: this.parseDuration(item.prepTime || item.cookTime || item.totalTime),
                                     ingredients: this.extractArray(item.recipeIngredient || []),
                                     instructions: this.extractInstructions(item.recipeInstructions || [])
@@ -1341,16 +1563,17 @@
 
             extractArray(arr) {
                 if (!Array.isArray(arr)) return [];
-                return arr.map(item => 
-                    typeof item === 'string' ? item.trim() : (item.text || item.name || String(item)).trim()
-                ).filter(item => item.length > 0);
+                return arr.map(item => {
+                    const text = typeof item === 'string' ? item : (item.text || item.name || String(item));
+                    return this.normalizePolishText(text.trim());
+                }).filter(item => item.length > 0);
             }
 
             extractInstructions(instructions) {
                 if (!Array.isArray(instructions)) return [];
                 return instructions.map(instruction => {
-                    if (typeof instruction === 'string') return instruction.trim();
-                    return (instruction.text || instruction.name || String(instruction)).trim();
+                    const text = typeof instruction === 'string' ? instruction : (instruction.text || instruction.name || String(instruction));
+                    return this.normalizePolishText(text.trim());
                 }).filter(item => item.length > 0);
             }
 
@@ -1395,16 +1618,17 @@
                             content: `Wyodrębnij przepis kulinarny z tekstu strony i zwróć TYLKO poprawny JSON bez dodatkowych komentarzy:
 
 {
-  "name": "nazwa przepisu",
-  "prepTime": "czas przygotowania",
+  "name": "nazwa przepisu (z polskimi literami!)",
+  "prepTime": "czas przygotowania",  
   "ingredients": ["składnik 1", "składnik 2", "składnik 3"],
   "instructions": ["krok 1", "krok 2", "krok 3"]
 }
 
-WAŻNE: 
+WAŻNE:
+- Zachowaj polskie znaki (ą,ć,ę,ł,ń,ó,ś,ź,ż)
 - Musisz zwrócić co najmniej 3 składniki i 3 kroki
-- Jeśli nie znajdziesz pełnego przepisu, zwróć błąd
 - Tłumacz na język polski jeśli potrzeba
+- Jeśli nie znajdziesz pełnego przepisu, zwróć błąd
 
 Tekst strony:
 ${cleanText}`
@@ -1422,7 +1646,12 @@ ${cleanText}`
                 try {
                     const jsonMatch = content.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
-                        return JSON.parse(jsonMatch[0]);
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        // Normalizuj polskie znaki
+                        if (parsed.name) parsed.name = this.normalizePolishText(parsed.name);
+                        if (parsed.ingredients) parsed.ingredients = parsed.ingredients.map(this.normalizePolishText);
+                        if (parsed.instructions) parsed.instructions = parsed.instructions.map(this.normalizePolishText);
+                        return parsed;
                     }
                     throw new Error('Brak JSON w odpowiedzi');
                 } catch (e) {
@@ -1431,71 +1660,15 @@ ${cleanText}`
             }
 
             parseAdvancedHTML(html, url) {
-                const domain = new URL(url).hostname;
-                
-                const titleMatch = html.match(/<h1[^>]*>(.*?)<\/h1>/i) || 
-                                  html.match(/<title>(.*?)<\/title>/i);
-                const name = titleMatch ? 
-                    titleMatch[1].replace(/<[^>]*>/g, '').trim() : 
-                    `Przepis ze strony ${domain}`;
-                
-                const ingredients = this.extractListFromHTML(html, 'ingredients');
-                const instructions = this.extractListFromHTML(html, 'instructions');
-                
-                return {
-                    name: name.substring(0, 80),
-                    prepTime: 'Sprawdź na stronie',
-                    ingredients: ingredients.length > 0 ? ingredients : 
-                        [`Nie udało się automatycznie wyodrębnić składników ze strony ${domain}`, 
-                         'Kliknij link w tytule aby zobaczyć pełną listę składników'],
-                    instructions: instructions.length > 0 ? instructions : 
-                        [`Instrukcje dostępne na oryginalnej stronie ${domain}`,
-                         'Możesz przepisać instrukcje ręcznie używając przycisku "Edytuj"']
-                };
-            }
-
-            extractListFromHTML(html, type) {
-                const items = [];
-                
-                const patterns = type === 'ingredients' ? 
-                    ['ingredient', 'składnik', 'recipe-ingredient'] :
-                    ['instruction', 'step', 'method', 'preparation', 'recipe-instruction'];
-                
-                const contexts = [
-                    ...patterns.map(p => `<[uo]l[^>]*class="[^"]*${p}[^"]*"[^>]*>(.*?)<\/[uo]l>`),
-                    ...patterns.map(p => `<div[^>]*class="[^"]*${p}[^"]*"[^>]*>(.*?)<\/div>`),
-                    '<ul[^>]*>(.*?)<\/ul>',
-                    '<ol[^>]*>(.*?)<\/ol>'
-                ];
-                
-                for (const pattern of contexts) {
-                    const regex = new RegExp(pattern, 'gis');
-                    const matches = html.match(regex) || [];
-                    
-                    for (const match of matches) {
-                        const listItems = match.match(/<li[^>]*>(.*?)<\/li>/gis) || [];
-                        const extracted = listItems.map(item => 
-                            item.replace(/<[^>]*>/g, '').trim()
-                        ).filter(item => item.length > 10 && item.length < 200);
-                        
-                        if (extracted.length >= 3) {
-                            items.push(...extracted);
-                            break;
-                        }
-                    }
-                    
-                    if (items.length >= 3) break;
-                }
-                
-                return items.slice(0, 15);
+                return this.parseIntelligentHTML(html, url);
             }
 
             cleanText(text) {
-                return text
-                    .replace(/<[^>]+>/g, '')
-                    .replace(/\s+/g, ' ')
-                    .replace(/&[^;]+;/g, '')
-                    .trim();
+                return this.normalizePolishText(
+                    text.replace(/<[^>]+>/g, '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                );
             }
 
             sleep(ms) {
@@ -1509,6 +1682,7 @@ ${cleanText}`
                 this.nextId = this.getNextId();
                 this.extractor = new RecipeExtractor();
                 this.currentEditId = null;
+                this.filteredRecipes = this.recipes;
                 this.initializeApp();
                 this.setupEventListeners();
                 this.displayRecipes();
@@ -1523,6 +1697,10 @@ ${cleanText}`
                 this.extractBtn = document.getElementById('extractBtn');
                 this.saveBtn = document.getElementById('saveBtn');
                 this.cancelBtn = document.getElementById('cancelBtn');
+                
+                // Search elements
+                this.searchInput = document.getElementById('searchInput');
+                this.searchResultsInfo = document.getElementById('searchResultsInfo');
                 
                 // Modal elements
                 this.modalTitle = document.getElementById('modalTitle');
@@ -1548,6 +1726,9 @@ ${cleanText}`
             }
 
             setupEventListeners() {
+                // Search
+                this.searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
+
                 // Modal
                 this.addRecipeBtn.addEventListener('click', () => this.openModal());
                 this.closeModalBtn.addEventListener('click', () => this.closeModal());
@@ -1594,6 +1775,31 @@ ${cleanText}`
                 });
             }
 
+            // Wyszukiwarka na żywo
+            handleSearch(query) {
+                if (!query.trim()) {
+                    this.filteredRecipes = this.recipes;
+                    this.searchResultsInfo.classList.add('hidden');
+                } else {
+                    const searchTerm = query.toLowerCase().trim();
+                    this.filteredRecipes = this.recipes.filter(recipe => {
+                        return recipe.name.toLowerCase().includes(searchTerm) ||
+                               recipe.ingredients.some(ingredient => 
+                                   ingredient.toLowerCase().includes(searchTerm)
+                               ) ||
+                               recipe.instructions.some(instruction => 
+                                   instruction.toLowerCase().includes(searchTerm)
+                               );
+                    });
+                    
+                    // Pokaż info o wynikach
+                    document.getElementById('resultsCount').textContent = this.filteredRecipes.length;
+                    this.searchResultsInfo.classList.remove('hidden');
+                }
+                
+                this.displayRecipes();
+            }
+
             toggleApiKeyInput() {
                 if (this.aiCheckbox.checked) {
                     this.apiKeyInput.classList.remove('hidden');
@@ -1607,13 +1813,11 @@ ${cleanText}`
                 this.modal.classList.remove('hidden');
                 
                 if (editId) {
-                    // Edit mode
                     this.modalTitle.textContent = 'Edytuj Przepis';
                     this.formTitle.textContent = '📝 Edytuj przepis';
                     this.extractionSection.classList.add('hidden');
                     this.dividerSection.classList.add('hidden');
                     
-                    // Load recipe data
                     const recipe = this.recipes.find(r => r.id === editId);
                     if (recipe) {
                         document.getElementById('recipeName').value = recipe.name;
@@ -1622,7 +1826,6 @@ ${cleanText}`
                         document.getElementById('instructions').value = recipe.instructions.join('\n');
                     }
                 } else {
-                    // Add mode
                     this.modalTitle.textContent = 'Dodaj Nowy Przepis';
                     this.formTitle.textContent = '📝 Wprowadź przepis ręcznie';
                     this.extractionSection.classList.remove('hidden');
@@ -1646,7 +1849,6 @@ ${cleanText}`
                 
                 if (!recipe) return;
                 
-                // Set modal content
                 document.getElementById('viewModalTitle').textContent = recipe.name;
                 document.getElementById('viewRecipeName').textContent = recipe.name;
                 document.getElementById('viewRecipeTime').textContent = `⏱️ ${recipe.prepTime}`;
@@ -1729,11 +1931,7 @@ ${cleanText}`
                 const useAI = this.aiCheckbox.checked && this.extractor.apiKey.length > 10;
                 
                 const domain = new URL(url).hostname;
-                if (domain.includes('kwestiasmaku.com') || domain.includes('aniagotuje.pl') || domain.includes('przepisy.pl')) {
-                    this.showExtractionStatus(`🇵🇱 Analizuję ${domain}...`, 'info');
-                } else {
-                    this.showExtractionStatus(useAI ? '🤖 Analizuję z Claude AI...' : '🔍 Analizuję przepis...', 'info');
-                }
+                this.showExtractionStatus(`🔍 Analizuję ${domain}...`, 'info');
 
                 try {
                     const recipe = await this.extractor.extractRecipe(url, useAI);
@@ -1744,9 +1942,7 @@ ${cleanText}`
                         document.getElementById('ingredients').value = recipe.ingredients.join('\n');
                         document.getElementById('instructions').value = recipe.instructions.join('\n');
 
-                        if (domain.includes('kwestiasmaku.com') || domain.includes('aniagotuje.pl') || domain.includes('przepisy.pl')) {
-                            this.showExtractionStatus(`✅ Użyto dedykowanego parsera dla ${domain}`, 'success');
-                        } else if (useAI) {
+                        if (useAI) {
                             this.showExtractionStatus('✅ Przepis wyodrębniony przez Claude AI!', 'success');
                         } else {
                             this.showExtractionStatus('✅ Przepis wyodrębniony!', 'success');
@@ -1789,7 +1985,6 @@ ${cleanText}`
                 const instructions = instructionsText.split('\n').filter(item => item.trim());
 
                 if (this.currentEditId) {
-                    // Edit existing recipe
                     const recipeIndex = this.recipes.findIndex(r => r.id === this.currentEditId);
                     if (recipeIndex !== -1) {
                         this.recipes[recipeIndex] = {
@@ -1801,7 +1996,6 @@ ${cleanText}`
                         };
                     }
                 } else {
-                    // Add new recipe
                     const newRecipe = {
                         id: this.nextId++,
                         name,
@@ -1809,7 +2003,7 @@ ${cleanText}`
                         ingredients,
                         instructions,
                         source: sourceUrl || null,
-                        image: null, // Will be set during extraction
+                        image: null,
                         dateAdded: new Date().toISOString()
                     };
                     
@@ -1817,7 +2011,7 @@ ${cleanText}`
                 }
 
                 this.saveRecipes();
-                this.displayRecipes();
+                this.handleSearch(this.searchInput.value); // Refresh filtered results
                 this.closeModal();
                 
                 this.showToast(this.currentEditId ? '✅ Przepis zaktualizowany!' : '✅ Przepis zapisany!');
@@ -1846,7 +2040,7 @@ ${cleanText}`
                 if (confirm('Czy na pewno chcesz usunąć ten przepis?')) {
                     this.recipes = this.recipes.filter(recipe => recipe.id !== id);
                     this.saveRecipes();
-                    this.displayRecipes();
+                    this.handleSearch(this.searchInput.value); // Refresh filtered results
                     this.showToast('🗑️ Przepis usunięty');
                 }
             }
@@ -1860,19 +2054,32 @@ ${cleanText}`
             }
 
             displayRecipes() {
+                const recipesToShow = this.filteredRecipes;
+                
                 if (this.recipes.length === 0) {
                     this.recipesGrid.innerHTML = `
                         <div class="empty-state">
                             <h3>🍽️ Brak przepisów</h3>
                             <p>Dodaj swój pierwszy przepis!</p>
-                            <p><small>💡 Obsługujemy polskie strony: KwestiaSmaku.com, AniaGotuje.pl, Przepisy.pl</small></p>
-                            <p><small>🤖 Włącz Claude AI dla lepszego wyodrębniania z innych stron</small></p>
+                            <p><small>💡 Obsługujemy wszystkie strony kulinarne z inteligentnym parserem</small></p>
+                            <p><small>🤖 Włącz Claude AI dla najlepszych rezultatów</small></p>
                         </div>
                     `;
                     return;
                 }
 
-                this.recipesGrid.innerHTML = this.recipes.map(recipe => `
+                if (recipesToShow.length === 0) {
+                    this.recipesGrid.innerHTML = `
+                        <div class="no-results">
+                            <h3>🔍 Brak wyników</h3>
+                            <p>Nie znaleziono przepisów pasujących do wyszukiwania "${this.searchInput.value}"</p>
+                            <p><small>Spróbuj wyszukać inną nazwę lub składnik</small></p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                this.recipesGrid.innerHTML = recipesToShow.map(recipe => `
                     <div class="recipe-card">
                         <div class="recipe-image">
                             ${recipe.image ? 
